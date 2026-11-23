@@ -8,7 +8,7 @@
 - 附加檔案和圖片：點迴紋針、拖曳檔案，或用 Ctrl+V 貼上。圖片會直接交給模型看；所有附件也會存到 `data/workspace/<session>/uploads/`，並把絕對路徑告訴 Hermes，讓它能用工具讀取檔案。
 - 下載檔案：Hermes 會被要求把要給你的檔案存到 `data/workspace/<session>/outputs/`。右上角的資料夾圖示會列出這個聊天的所有檔案；回覆裡出現的絕對路徑也會自動變成下載連結。
 - 切換模型：模型選單列出 Hermes 已登入的所有 provider 的模型，可以搜尋，也能選推理強度。選好的模型會鎖定在該聊天（`require_model_lock`），之後重新開啟也會沿用。
-- MCP 與 Skills 管理（選用，透過 Hermes dashboard）：MCP 伺服器的啟用／停用、測試連線、OAuth 登入、新增／刪除、從 MCP 目錄安裝；Skills 的列表、啟用／停用、編輯、新增，以及從 Hub 搜尋和安裝。
+- MCP、Skills 與模型設定（選用，透過 Hermes dashboard）：MCP 伺服器的啟用／停用、測試連線、OAuth 登入、新增／刪除、從 MCP 目錄安裝；Skills 的列表、啟用／停用、編輯、新增，以及從 Hub 搜尋和安裝；變更 Hermes 的全域預設模型和輔助任務模型，新增或移除 provider 的 API 金鑰。
 - 左邊的聊天清單就是 Hermes 本身的 session 清單。可以重新命名、刪除聊天，顯示其他來源（CLI、Telegram…），也可以替其他 OpenAI 相容程式建立的對話加上標籤。
 - Hermes 要執行指令需要核准時，輸入框上方會出現核准卡片。
 - 有密碼登入。Hermes 的 API 金鑰只留在伺服器端，不會傳到瀏覽器。
@@ -59,9 +59,9 @@ docker compose down         # 停止
 | `MAX_UPLOAD_MB` | 單一檔案上傳大小上限，預設 `200` |
 | `DASHBOARD_*` | MCP／Skills 管理，見下一節 |
 
-## MCP 與 Skills 管理（選用）
+## MCP、Skills 與模型設定（選用）
 
-Hermes API server 沒有提供這類功能的 API，所以 Hermes Chat 改呼叫 **Hermes dashboard**（`hermes dashboard`，預設 port `9119`），而且只開放白名單內的 MCP／Skills 路由。沒設定這部分也不影響其他功能，管理畫面會顯示設定說明。
+Hermes API server 沒有提供這類功能的 API，所以 Hermes Chat 改呼叫 **Hermes dashboard**（`hermes dashboard`，預設 port `9119`），而且只開放白名單內的 MCP／Skills／模型路由。寫入 Hermes `.env` 只限 Hermes 自己宣告的 provider 金鑰變數（例如 `DEEPSEEK_API_KEY`），像 `API_SERVER_KEY` 這類金鑰無法從網頁修改。沒設定這部分也不影響其他功能，管理畫面會顯示設定說明。
 
 如果 dashboard 不在 `API_SERVER_HOST:9119`，請設定 `DASHBOARD_URL`，然後擇一設定登入方式：
 

@@ -8,7 +8,7 @@ A ChatGPT-style web chat for a self-hosted [Hermes Agent](https://github.com/Nou
 - Attach files and images: click the paperclip, drag and drop, or paste with Ctrl+V. Images go to the model directly; every attachment is also saved under `data/workspace/<session>/uploads/`, and Hermes is told the absolute path so it can read the file with its tools.
 - File downloads: Hermes is asked to save output files to `data/workspace/<session>/outputs/`. The folder icon at the top right lists every file in the current chat, and absolute paths in a reply become download links.
 - Model switching: the model menu lists every model from the providers Hermes is signed in to, with search and a reasoning-effort choice. The choice is locked to that chat (`require_model_lock`) and kept when you reopen it.
-- MCP and Skills management (optional, through the Hermes dashboard): enable/disable, test, OAuth login, add/remove MCP servers, install from the MCP catalog; list, toggle, edit, create, search and install skills from the hub.
+- MCP, Skills and model settings (optional, through the Hermes dashboard): enable/disable, test, OAuth login, add/remove MCP servers, install from the MCP catalog; list, toggle, edit, create, search and install skills from the hub; change Hermes's global default model and auxiliary-task models, and add or remove provider API keys.
 - The chat list is Hermes's own session list. You can rename and delete chats, show other sources (CLI, Telegram…), and optionally tag sessions another OpenAI-compatible client creates.
 - Command approvals appear as a card above the input box.
 - Password login. The Hermes API key stays on the server and never reaches the browser.
@@ -59,9 +59,9 @@ docker compose down         # stop
 | `MAX_UPLOAD_MB` | Size limit per upload, default `200` |
 | `DASHBOARD_*` | MCP/Skills management, see below |
 
-## MCP and Skills management (optional)
+## MCP, Skills and model settings (optional)
 
-The Hermes API server has no endpoints for this, so Hermes Chat calls the **Hermes dashboard** (`hermes dashboard`, default port `9119`) and only a whitelist of its MCP/skills routes. Without this configured, everything else still works and the management screen shows setup instructions.
+The Hermes API server has no endpoints for this, so Hermes Chat calls the **Hermes dashboard** (`hermes dashboard`, default port `9119`) and only a whitelist of its MCP/skills/model routes. Writes to the Hermes `.env` are limited to provider API-key variables Hermes itself declares (e.g. `DEEPSEEK_API_KEY`); keys such as `API_SERVER_KEY` cannot be changed from the web UI. Without this configured, everything else still works and the management screen shows setup instructions.
 
 Set `DASHBOARD_URL` if the dashboard is not at `API_SERVER_HOST:9119`, then pick one way to authenticate:
 

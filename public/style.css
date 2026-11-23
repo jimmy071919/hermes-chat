@@ -394,3 +394,4 @@ a.file-chip:hover { background: var(--bg-hover); }
 .sess-filter button:hover { background: var(--bg-hover); }
 .sess-filter button.on { background: var(--bg-active); color: var(--text); font-weight: 600; }
 #topbar .title.xz-title::before { content: attr(data-label); font-size: 11px; font-weight: 600; color: #fff; background: #f08c00; border-radius: 4px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px; }
+.card.card-dim { opacity: .75; } .card.card-dim:hover { opacity: 1; }

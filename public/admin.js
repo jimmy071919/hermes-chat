@@ -23,8 +23,8 @@ function openModal(title, body, actions = []) {
   card.innerHTML = '';
   card.append(h('div', { class: 'modal-head' }, h('strong', {}, title),
     h('button', { type: 'button', class: 'icon-btn', onclick: closeModal, 'aria-label': '關閉' }, svg(ICON.x))),
-    h('div', { class: 'modal-body' }, body),
-    actions.length ? h('div', { class: 'modal-actions' }, actions) : null);
+    h('div', { class: 'modal-body' }, body));
+  if (actions.length) card.append(h('div', { class: 'modal-actions' }, actions));
   m.hidden = false;
 }
 function closeModal() { $('#modal').hidden = true; }
@@ -58,7 +58,7 @@ async function renderAdmin() {
     body.innerHTML = '';
   }
   if (!A.status.configured || !A.status.reachable) return body.append(setupHelp());
-  if (A.tab === 'mcp') renderMcp(body); else renderSkills(body);
+  if (A.tab === 'mcp') renderMcp(body); else if (A.tab === 'models') renderModels(body); else renderSkills(body);
 }
 
 function setupHelp() {
@@ -426,3 +426,153 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!$('#modal').hidden) closeModal(); else if (!$('#admin').hidden) closeAdmin();
 });
+
+// ---------- Models (global default, auxiliary tasks, provider keys) ----------
+const AUX_LABEL = {
+  vision: '看圖（視覺）', compression: '壓縮長對話', approval: '指令風險判斷', mcp: 'MCP 工具',
+  title_generation: '產生聊天標題', review: '審查', voice_chat: '語音對話', triage_specifier: '任務分類',
+  kanban_decomposer: 'Kanban 任務拆解', profile_describer: 'Profile 描述', curator: 'Skills 整理',
+  session_search: '搜尋聊天紀錄', web_extract: '網頁內容擷取', skills_hub: 'Skills Hub', flush_memories: '記憶整理',
+};
+const fmtCtx = (n) => !n ? '未知' : n >= 1e6 ? `${(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : `${Math.round(n / 1000)}K`;
+
+async function loadModelData() {
+  const [info, aux, opts] = await Promise.all([
+    adm('/api/model/info'), adm('/api/model/auxiliary'), adm('/api/model/options?include_unconfigured=true'),
+  ]);
+  A.modelData = { info, aux, opts };
+  return A.modelData;
+}
+
+async function renderModels(body) {
+  const box = h('div', {}, h('div', { class: 'admin-empty' }, '載入模型設定…'));
+  body.append(box);
+  let data;
+  try { data = await loadModelData(); } catch (e) { box.innerHTML = ''; box.append(h('div', { class: 'err-text' }, e.message)); return; }
+  box.innerHTML = '';
+  const { info, aux, opts } = data;
+  const providerName = (slug) => (opts.providers || []).find((p) => p.slug === slug)?.name || slug;
+
+  // --- default model
+  const caps = info.capabilities || {};
+  box.append(
+    h('div', { class: 'section-head' }, h('h3', {}, '預設模型'),
+      btn('變更預設模型', () => pickModel({ title: '選擇預設模型', current: { provider: info.provider, model: info.model }, onPick: setMainModel }), 'primary')),
+    h('div', { class: 'card' },
+      h('div', { class: 'card-top' }, h('div', { class: 'card-title' }, h('b', {}, info.model || '（未設定）'), pill(providerName(info.provider)),
+        caps.supports_reasoning ? pill('推理') : null, caps.supports_vision ? pill('看圖') : null, caps.supports_tools ? pill('工具') : null)),
+      h('div', { class: 'card-sub' }, `Context 長度：${fmtCtx(info.effective_context_length)}${caps.max_output_tokens ? `　最大輸出：${fmtCtx(caps.max_output_tokens)}` : ''}`),
+      h('div', { class: 'card-sub muted-text' }, 'Hermes 全域預設模型（寫入 config.yaml）。新的聊天才會套用；已鎖定模型的聊天維持原本的模型。')));
+
+  // --- auxiliary
+  const auxList = h('div', { class: 'cards' });
+  box.append(
+    h('div', { class: 'section-head', style: 'margin-top:22px' }, h('h3', {}, '輔助模型'),
+      btn('全部改回自動', async () => {
+        if (!confirm('把所有輔助任務都改回「自動」？')) return;
+        try { await adm('/api/model/set', { method: 'POST', body: jbody({ scope: 'auxiliary', task: '__reset__', provider: 'auto', model: '' }) }); toast('已全部改回自動'); renderAdmin(); }
+        catch (e) { toast('失敗：' + e.message); }
+      }, 'ghost')),
+    h('div', { class: 'card-sub muted-text', style: 'margin:-4px 0 10px' }, 'Hermes 背景工作用的模型。「自動」會依主模型挑選合適又便宜的模型。'),
+    auxList);
+  for (const t of aux.tasks || []) {
+    const isAuto = (t.provider || 'auto') === 'auto' && !t.model;
+    const eff = t.effective && !isAuto ? null : t.effective;
+    auxList.append(h('div', { class: 'skill-row' },
+      h('div', { class: 'skill-main' },
+        h('div', {}, h('b', {}, t.label || AUX_LABEL[t.task] || t.task), h('span', { class: 'muted-text mono' }, ' ' + t.task)),
+        h('div', { class: 'card-sub' }, isAuto ? `自動${eff?.model ? `（目前：${eff.model}）` : ''}` : `${providerName(t.provider)} · ${t.model || '（provider 預設）'}`,
+          t.reasoning_effort ? h('span', { class: 'muted-text' }, `　推理：${t.reasoning_effort}`) : null)),
+      h('div', { class: 'row-gap' },
+        !isAuto ? btn('改回自動', () => setAuxModel(t.task, null), 'ghost') : null,
+        btn('指定模型', () => pickModel({ title: `「${t.label || AUX_LABEL[t.task] || t.task}」使用的模型`, current: isAuto ? null : { provider: t.provider, model: t.model }, onPick: (sel) => setAuxModel(t.task, sel) })))));
+  }
+
+  // --- provider keys
+  const provList = h('div', { class: 'cards' });
+  box.append(
+    h('div', { class: 'section-head', style: 'margin-top:22px' }, h('h3', {}, 'Provider 與金鑰')),
+    h('div', { class: 'card-sub muted-text', style: 'margin:-4px 0 10px' }, '貼上 API 金鑰即可啟用該 provider，金鑰只存在 Hermes 的 .env。OAuth／訂閱類的 provider 請在終端機執行 hermes model 設定。'),
+    provList);
+  const provs = [...(opts.providers || [])].sort((a, b) => (b.authenticated - a.authenticated) || a.name.localeCompare(b.name));
+  for (const p of provs) provList.append(providerCard(p));
+}
+
+function providerCard(p) {
+  const result = h('div', { class: 'card-result' });
+  const keyed = p.auth_type === 'api_key' && p.key_env;
+  const input = keyed ? h('input', { type: 'password', placeholder: `${p.key_env}`, autocomplete: 'off', spellcheck: 'false' }) : null;
+  const save = keyed ? btn(p.authenticated ? '更換金鑰' : '儲存並啟用', () => busy(save, async () => {
+    const value = input.value.trim(); if (!value) { toast('請先貼上金鑰'); return; }
+    result.innerHTML = '';
+    try {
+      const v = await adm('/api/providers/validate', { method: 'POST', body: jbody({ key: p.key_env, value }) });
+      if (!v.ok && v.reachable !== false) { result.append(h('div', { class: 'err-text' }, '✗ 金鑰無效：' + (v.message || ''))); return; }
+      await adm('/api/env', { method: 'PUT', body: jbody({ key: p.key_env, value, provider_setup: true }) });
+      input.value = '';
+      const verified = v.ok && v.reachable !== false;
+      toast(`${p.name} 已${p.authenticated ? '更新金鑰' : '啟用'}${verified ? '（金鑰驗證通過）' : '（Hermes 無法驗證這個金鑰，已先儲存）'}`);
+      if (typeof loadModelOptions === 'function') loadModelOptions(true);
+      renderAdmin();
+    } catch (e) { result.append(h('div', { class: 'err-text' }, e.message)); }
+  }), 'primary') : null;
+  const remove = keyed && p.authenticated ? btn('移除金鑰', async () => {
+    if (!confirm(`移除 ${p.name} 的金鑰（${p.key_env}）？使用這個 provider 的模型將無法使用。`)) return;
+    try { await adm('/api/env', { method: 'DELETE', body: jbody({ key: p.key_env }) }); toast('已移除'); if (typeof loadModelOptions === 'function') loadModelOptions(true); renderAdmin(); }
+    catch (e) { toast('失敗：' + e.message); }
+  }, 'danger') : null;
+  const status = p.authenticated ? pill(`已啟用 · ${p.total_models || (p.models || []).length} 個模型`, '') : pill('未設定', 'muted');
+  const hint = !p.authenticated && !keyed ? h('div', { class: 'card-sub muted-text' }, p.warning || '請在終端機執行 hermes model 設定') : null;
+  return h('div', { class: 'card' + (p.authenticated ? '' : ' card-dim') },
+    h('div', { class: 'card-top' }, h('div', { class: 'card-title' }, h('b', {}, p.name), status, p.is_current ? pill('預設', 'warn') : null, h('span', { class: 'muted-text mono' }, p.slug))),
+    hint,
+    keyed ? h('div', { class: 'toolbar', style: 'margin:8px 0 0' }, input, save, remove) : null,
+    result);
+}
+
+function pickModel({ title, current, onPick }) {
+  const opts = A.modelData?.opts || { providers: [] };
+  const q = h('input', { type: 'search', placeholder: '搜尋模型…', autocomplete: 'off' });
+  const list = h('div', { class: 'mm-list', style: 'max-height:55vh' });
+  const draw = () => {
+    const term = q.value.trim().toLowerCase(); list.innerHTML = '';
+    for (const p of (opts.providers || []).filter((x) => x.authenticated && (x.models || []).length)) {
+      const models = p.models.map((m) => (typeof m === 'string' ? m : m.id)).filter((m) => !term || m.toLowerCase().includes(term) || p.name.toLowerCase().includes(term));
+      if (!models.length) continue;
+      list.append(h('div', { class: 'mm-group' }, p.name));
+      for (const m of models) {
+        const sel = current && current.provider === p.slug && current.model === m;
+        const c = p.capabilities?.[m] || {};
+        list.append(h('button', { type: 'button', class: 'mm-item' + (sel ? ' sel' : ''), onclick: () => { closeModal(); onPick({ provider: p.slug, model: m }); } },
+          h('span', { class: 'nm' }, m), c.reasoning ? h('span', { class: 'tag' }, '推理') : null, c.fast ? h('span', { class: 'tag' }, 'fast') : null,
+          (() => { const s = svg(ICON.check); s.setAttribute('class', 'ck'); return s; })()));
+      }
+    }
+    if (!list.children.length) list.append(h('div', { class: 'mm-empty' }, '沒有符合的模型'));
+  };
+  q.addEventListener('input', draw); draw();
+  openModal(title, h('div', {}, h('div', { class: 'toolbar' }, q), list));
+  setTimeout(() => q.focus(), 50);
+}
+
+async function setMainModel(sel, confirmed = false) {
+  try {
+    const r = await adm('/api/model/set', { method: 'POST', body: jbody({ scope: 'main', provider: sel.provider, model: sel.model, ...(confirmed ? { confirm_expensive_model: true } : {}) }) });
+    if (r && r.confirm_required) {
+      if (confirm(`${r.confirm_message || '這個模型費用較高。'}\n\n確定要設為預設模型嗎？`)) return setMainModel(sel, true);
+      return;
+    }
+    if (r && r.ok === false) { toast('失敗：' + (r.error || r.message || '無法設定')); return; }
+    toast(`預設模型已改為 ${sel.model}`);
+    if (typeof loadModelOptions === 'function') loadModelOptions(true);
+    renderAdmin();
+  } catch (e) { toast('失敗：' + e.message); }
+}
+
+async function setAuxModel(task, sel) {
+  try {
+    await adm('/api/model/set', { method: 'POST', body: jbody({ scope: 'auxiliary', task, provider: sel ? sel.provider : 'auto', model: sel ? sel.model : '' }) });
+    toast(sel ? `已指定 ${sel.model}` : '已改回自動');
+    renderAdmin();
+  } catch (e) { toast('失敗：' + e.message); }
+}

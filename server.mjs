@@ -131,7 +131,28 @@ const DASH_ROUTES = [
   ['GET', /^\/api\/actions\/[A-Za-z0-9_.-]+\/status$/],
   ['POST', /^\/api\/gateway\/restart$/],
   ['GET', /^\/api\/tools\/toolsets$/],
+  // model settings
+  ['GET', /^\/api\/model\/(info|options|auxiliary)$/], ['POST', /^\/api\/model\/set$/],
+  ['POST', /^\/api\/providers\/validate$/],
+  ['PUT', /^\/api\/env$/], ['DELETE', /^\/api\/env$/],  // provider API keys only, see providerKeyGuard
 ];
+
+// Writes to the Hermes .env through the dashboard are limited to provider API-key variables
+// that Hermes itself declares (key_env of an api_key provider), so this UI can never touch
+// API_SERVER_KEY, gateway tokens or anything else in that file.
+async function providerKeyGuard(rawBody) {
+  let key = '';
+  try { key = String(JSON.parse(rawBody || '{}').key || ''); } catch { return 'Invalid JSON'; }
+  if (!/^[A-Z][A-Z0-9_]{1,80}$/.test(key)) return 'Invalid key name';
+  let allowed;
+  try {
+    const r = await fetch(`${CFG.hermesUrl}/api/model/options`, { headers: hermesHeaders() });
+    const d = await r.json();
+    allowed = new Set((d.providers || []).filter((p) => p.auth_type === 'api_key' && p.key_env).map((p) => p.key_env));
+    for (const p of d.providers || []) if (p.authenticated && p.key_env) allowed.add(p.key_env);
+  } catch { return 'Could not load the provider list from Hermes'; }
+  return allowed.has(key) ? '' : `${key} is not a provider API key and cannot be changed here`;
+}
 
 // ---------- helpers ----------
 const SESSION_ID_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
@@ -385,7 +406,12 @@ async function handleApi(req, res, url) {
     if (!DASH_ROUTES.some(([m, re]) => m === req.method && re.test(target))) {
       return send(res, 404, { error: { message: 'Not an allowed admin route' } });
     }
-    const body = ['POST', 'PUT', 'PATCH'].includes(req.method) ? (await readBody(req)).toString('utf8') || '{}' : undefined;
+    let body = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) ? (await readBody(req)).toString('utf8') || undefined : undefined;
+    if (['/api/env', '/api/providers/validate'].includes(target)) {
+      const refused = await providerKeyGuard(body);
+      if (refused) return send(res, 400, { error: { message: refused } });
+    }
+    if (body === undefined && ['POST', 'PUT', 'PATCH'].includes(req.method)) body = '{}';
     let r;
     try { r = await dashFetch(target + url.search, { method: req.method, body }); }
     catch (e) { return send(res, e.status || 502, { error: { message: `Hermes dashboard: ${e.message}` } }); }
