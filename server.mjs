@@ -39,6 +39,10 @@ const CFG = {
   password: env.APP_PASSWORD || '',
   dataDir: path.resolve(APP_DIR, env.DATA_DIR || 'data'),
   maxUploadBytes: Number(env.MAX_UPLOAD_MB || 200) * 1024 * 1024,
+  // Language Hermes should answer in (e.g. "Traditional Chinese (繁體中文, Taiwan usage)"); empty = follow the user.
+  replyLanguage: (env.REPLY_LANGUAGE || '').trim(),
+  // Tag for sessions created through /v1/chat/completions by another client (e.g. a voice assistant); empty = no tag.
+  chatCompletionsLabel: (env.CHAT_COMPLETIONS_LABEL || '').trim(),
 };
 CFG.workspace = path.join(CFG.dataDir, 'workspace');
 // Extra roots the browser may download from (besides the workspace). Paths with a
@@ -258,7 +262,9 @@ function workspaceInstructions(sessionId) {
   return [
     '[Hermes Chat web UI]',
     'The user is talking to you through a ChatGPT-style web page.',
-    'Always reply in Traditional Chinese (繁體中文, Taiwan usage) unless the user explicitly asks for another language. Code, commands, file paths and proper nouns may stay in their original form.',
+    CFG.replyLanguage
+      ? `Always reply in ${CFG.replyLanguage} unless the user explicitly asks for another language. Code, commands, file paths and proper nouns may stay in their original form.`
+      : 'Reply in the same language the user writes in.',
     `Files the user attaches are saved under ${d.uploads} and referenced in their message as lines like "[附件] name — /absolute/path". Read them from disk with your tools when needed.`,
     `When you create a file the user should download (documents, code, images, archives, reports...), save it under ${d.outputs} and mention its full absolute path in your reply — the web page turns absolute paths into download links automatically.`,
     'To show an image inline you may also write MEDIA:/absolute/path/to/image.png on its own line.',
@@ -271,7 +277,7 @@ async function handleApi(req, res, url) {
   let m;
 
   if (p === '/api/config' && req.method === 'GET') {
-    return send(res, 200, { hermesUrl: CFG.hermesUrl, workspace: CFG.workspace, downloadRoots: CFG.downloadRoots });
+    return send(res, 200, { downloadRoots: CFG.downloadRoots, chatCompletionsLabel: CFG.chatCompletionsLabel });
   }
   if (p === '/api/health') return proxy(req, res, '/health');
   if (p === '/api/models') return proxy(req, res, '/v1/models');

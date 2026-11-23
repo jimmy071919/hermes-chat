@@ -367,7 +367,8 @@ async function loadSessions() {
 // Xiaozhi talks to Hermes through /v1/chat/completions, whose sessions get a derived
 // id "api-<16 hex>"; sessions this web UI creates are "api_<ts>_<hex>".
 const XIAOZHI_ID_RE = /^api-[0-9a-f]{16}$/;
-const isXiaozhi = (s) => !!s && (s.source || 'api_server') === 'api_server' && XIAOZHI_ID_RE.test(s.id || '');
+const ccLabel = () => S.config.chatCompletionsLabel || '';
+const isXiaozhi = (s) => !!ccLabel() && !!s && (s.source || 'api_server') === 'api_server' && XIAOZHI_ID_RE.test(s.id || '');
 function sessionKind(s) { return isXiaozhi(s) ? 'xiaozhi' : s.source === 'api_server' || !s.source ? 'web' : 'other'; }
 let sessionFilter = 'all';
 
@@ -392,7 +393,7 @@ function renderSessions() {
       const title = s.title || s.preview || '新聊天';
       const row = h('div', { class: 'sess' + (s.id === S.current ? ' active' : ''), title: `${title}\n${s.message_count || 0} 則訊息 · ${s.model || ''}`, onclick: () => openSession(s.id) },
         h('span', { class: 'name' }, title),
-        isXiaozhi(s) ? h('span', { class: 'src xz' }, '小智') : s.source && s.source !== 'api_server' ? h('span', { class: 'src' }, s.source) : null,
+        isXiaozhi(s) ? h('span', { class: 'src xz' }, ccLabel()) : s.source && s.source !== 'api_server' ? h('span', { class: 'src' }, s.source) : null,
         h('button', { class: 'more', type: 'button', 'aria-label': '選項', onclick: (e) => { e.stopPropagation(); sessionMenu(e.currentTarget, s); } }, svg(ICON.more)));
       list.append(row);
     }
@@ -444,6 +445,7 @@ async function openSession(id, { quiet } = {}) {
   const s = S.sessions.find((x) => x.id === id);
   setTitle(s?.title || s?.preview || '聊天');
   $('#title').classList.toggle('xz-title', isXiaozhi(s ?? { id }));
+  $('#title').dataset.label = ccLabel();
   applySessionModel(id);
   const box = $('#messages');
   if (!quiet) box.innerHTML = '';
@@ -799,6 +801,10 @@ async function init() {
   });
   bind();
   try { S.config = await api('/api/config'); } catch {}
+  // Label filter only when a chat-completions client label is configured.
+  const xzBtn = $('#sessFilter button[data-f=xiaozhi]');
+  if (ccLabel()) xzBtn.textContent = ccLabel();
+  else { $('#sessFilter').hidden = true; sessionFilter = 'all'; }
   await Promise.all([loadSessions(), loadModelOptions()]);
   const m = location.hash.match(/^#\/s\/(.+)$/);
   if (m) openSession(decodeURIComponent(m[1])); else { applySessionModel(null); $('#input').focus(); }
