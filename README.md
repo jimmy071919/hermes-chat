@@ -1,5 +1,7 @@
 # Hermes Chat
 
+**English** | [繁體中文](README.zh-TW.md)
+
 A ChatGPT-style web chat for a self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent), built on the Hermes API server.
 
 - Text chat with streaming replies, Markdown, and code highlighting. Tool calls and the thinking process show as collapsible sections.

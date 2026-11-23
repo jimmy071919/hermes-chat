@@ -257,6 +257,40 @@ async function proxy(req, res, upstreamPath, { body, method } = {}) {
   } catch { /* client went away */ }
 }
 
+// Resolve a pending command approval. When the gateway runs with a session authority, Hermes
+// only accepts exactly {request_id, execution_generation, choice}, where request_id is the
+// pending prompt's id and execution_generation the run's generation — neither is in the
+// approval.request event, so read them from GET /v1/runs/{id}. Without an authority the run
+// projection has no pending_controls and the plain {choice, request_id?} body is used.
+async function handleApproval(req, res, runId) {
+  const body = await readJson(req);
+  const choice = String(body.choice || '');
+  let payload = { choice, ...(body.request_id ? { request_id: String(body.request_id) } : {}) };
+  try {
+    const r = await fetch(`${CFG.hermesUrl}/v1/runs/${runId}`, { headers: hermesHeaders() });
+    if (r.ok) {
+      const run = await r.json();
+      const pending = (run.pending_controls || []).filter((c) => c && c.kind === 'approval');
+      const prompt = pending.find((c) => body.request_id && (c.prompt_id === body.request_id || c.request_id === body.request_id)) || pending[0];
+      if (prompt && Number.isInteger(run.execution_generation)) {
+        payload = { request_id: prompt.prompt_id || prompt.request_id, execution_generation: run.execution_generation, choice };
+      }
+    }
+  } catch { /* fall back to the plain body */ }
+  let up;
+  try {
+    up = await fetch(`${CFG.hermesUrl}/v1/runs/${runId}/approval`, {
+      method: 'POST', headers: hermesHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    return send(res, 502, { error: { message: `Cannot reach Hermes: ${e.message}` } });
+  }
+  const text = await up.text();
+  let data; try { data = JSON.parse(text); } catch { data = { error: { message: text.slice(0, 300) } }; }
+  if (!up.ok) console.warn('[hermes-chat] approval refused', up.status, runId, text.slice(0, 300));
+  return send(res, up.status, data);
+}
+
 function workspaceInstructions(sessionId) {
   const d = sessionDirs(sessionId);
   return [
@@ -287,8 +321,21 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/sessions' && (req.method === 'GET' || req.method === 'POST')) {
     if (req.method === 'POST') {
-      const body = await readJson(req);
-      return proxy(req, res, '/api/sessions', { body: { source: 'api_server', ...body } });
+      const body = { source: 'api_server', ...(await readJson(req)) };
+      // Hermes refuses a title another session already uses (e.g. two chats both opened with
+      // "哈囉"). Retry once without a title and let Hermes name the session itself.
+      if (body.title) {
+        const r = await fetch(`${CFG.hermesUrl}/api/sessions`, {
+          method: 'POST', headers: hermesHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body),
+        }).catch((e) => ({ ok: false, status: 502, text: async () => JSON.stringify({ error: { message: e.message } }) }));
+        const text = await r.text();
+        if (!(r.status === 400 && text.includes('invalid_title'))) {
+          res.writeHead(r.status, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(text);
+        }
+        delete body.title;
+      }
+      return proxy(req, res, '/api/sessions', { body });
     }
     return proxy(req, res, '/api/sessions' + url.search);
   }
@@ -316,6 +363,7 @@ async function handleApi(req, res, url) {
 
   if ((m = p.match(/^\/api\/runs\/([^/]+)\/(stop|approval)$/)) && req.method === 'POST') {
     if (!RUN_ID_RE.test(m[1])) return send(res, 400, { error: { message: 'bad run id' } });
+    if (m[2] === 'approval') return handleApproval(req, res, m[1]);
     return proxy(req, res, `/v1/runs/${m[1]}/${m[2]}`);
   }
 
