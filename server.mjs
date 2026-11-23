@@ -1,6 +1,7 @@
 // Hermes Chat — a ChatGPT-style web UI on top of the Hermes API server.
 // Zero dependencies: Node >= 20 (uses built-in fetch, streams, crypto).
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -37,6 +38,9 @@ const CFG = {
   hermesUrl: (env.HERMES_URL || `http://${hermesEnv.API_SERVER_HOST || '127.0.0.1'}:${hermesEnv.API_SERVER_PORT || 8642}`).replace(/\/+$/, ''),
   hermesKey: env.HERMES_API_KEY || hermesEnv.API_SERVER_KEY || '',
   password: env.APP_PASSWORD || '',
+  // HTTPS: PEM certificate (leaf + intermediates) and key. Both set = serve HTTPS on PORT.
+  tlsCert: env.TLS_CERT_FILE || '',
+  tlsKey: env.TLS_KEY_FILE || '',
   dataDir: path.resolve(APP_DIR, env.DATA_DIR || 'data'),
   maxUploadBytes: Number(env.MAX_UPLOAD_MB || 200) * 1024 * 1024,
   // Language Hermes should answer in (e.g. "Traditional Chinese (繁體中文, Taiwan usage)"); empty = follow the user.
@@ -512,7 +516,12 @@ async function serveStatic(req, res, url) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+const useTls = !!(CFG.tlsCert && CFG.tlsKey);
+const cookieSecure = useTls ? '; Secure' : '';
+function readTls() {
+  return { cert: fs.readFileSync(CFG.tlsCert), key: fs.readFileSync(CFG.tlsKey) };
+}
+const handler = async (req, res) => {
   const url = new URL(req.url, 'http://local');
   try {
     if (url.pathname === '/api/login' && req.method === 'POST') {
@@ -520,14 +529,14 @@ const server = http.createServer(async (req, res) => {
       const a = Buffer.from(String(password || '')), b = Buffer.from(CFG.password);
       if (!CFG.password || (a.length === b.length && crypto.timingSafeEqual(a, b))) {
         return send(res, 200, { ok: true }, {
-          'Set-Cookie': `${COOKIE}=${authToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 90}`,
+          'Set-Cookie': `${COOKIE}=${authToken}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 90}${cookieSecure}`,
         });
       }
       await new Promise((r) => setTimeout(r, 800));
       return send(res, 401, { error: { message: '密碼錯誤' } });
     }
     if (url.pathname === '/api/logout') {
-      return send(res, 200, { ok: true }, { 'Set-Cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0` });
+      return send(res, 200, { ok: true }, { 'Set-Cookie': `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${cookieSecure}` });
     }
     const publicPaths = ['/login', '/login.html', '/style.css', '/favicon.svg'];
     if (!isAuthed(req) && !publicPaths.includes(url.pathname) && !url.pathname.startsWith('/vendor/')) {
@@ -542,11 +551,26 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) send(res, e.status || 500, { error: { message: e.message } });
     else res.end();
   }
-});
+};
+const server = useTls ? https.createServer(readTls(), handler) : http.createServer(handler);
+if (useTls) {
+  // Renewed certificates (e.g. `step ca renew --daemon`) are picked up without a restart.
+  let reloadTimer;
+  const reload = () => {
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(() => {
+      try {
+        server.setSecureContext(readTls());
+        console.log('[hermes-chat] TLS certificate reloaded');
+      } catch (e) { console.error('[hermes-chat] TLS reload failed, keeping the previous certificate:', e.message); }
+    }, 2000);
+  };
+  for (const f of [CFG.tlsCert, CFG.tlsKey]) fs.watchFile(f, { interval: 30_000 }, (cur, prev) => { if (cur.mtimeMs !== prev.mtimeMs) reload(); });
+}
 server.requestTimeout = 0; // long agent turns + big uploads
 server.headersTimeout = 60_000;
 
 server.listen(CFG.port, CFG.host, () => {
-  console.log(`[hermes-chat] http://${CFG.host}:${CFG.port}  →  Hermes ${CFG.hermesUrl}`);
+  console.log(`[hermes-chat] ${useTls ? 'https' : 'http'}://${CFG.host}:${CFG.port}  →  Hermes ${CFG.hermesUrl}`);
   console.log(`[hermes-chat] workspace: ${CFG.workspace}  password: ${CFG.password ? 'on' : 'OFF'}`);
 });

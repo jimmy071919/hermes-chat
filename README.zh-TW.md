@@ -37,7 +37,7 @@ mkdir -p data
 docker compose up -d --build
 ```
 
-打開 `http://<HOST>:<PORT>`（預設 port 是 `9120`），用 `APP_PASSWORD` 登入。
+打開 `http://<HOST>:<PORT>`（有設定 TLS 時用 `https://`；預設 port 是 `9120`），用 `APP_PASSWORD` 登入。
 
 ```bash
 docker compose logs -f      # 看記錄
@@ -57,7 +57,35 @@ docker compose down         # 停止
 | `HERMES_HOME` | Hermes 的主資料夾，預設 `~/.hermes` |
 | `HERMES_URL`、`HERMES_API_KEY` | 覆寫從 `$HERMES_HOME/.env` 讀到的 API 位址和金鑰 |
 | `MAX_UPLOAD_MB` | 單一檔案上傳大小上限，預設 `200` |
+| `TLS_CERT_FILE`、`TLS_KEY_FILE` | 選填。改用 HTTPS，見下方說明 |
 | `DASHBOARD_*` | MCP／Skills 管理，見下一節 |
+
+## HTTPS（選用）
+
+在 `.env` 設定 `TLS_CERT_FILE` 和 `TLS_KEY_FILE`（PEM 格式，含中繼憑證；要用家目錄底下的絕對路徑），Hermes Chat 就會在 `PORT` 改用 **HTTPS**，登入 cookie 也會加上 `Secure`。程式會監看憑證檔案，續期後約一分鐘內自動換上新憑證，不需要重啟。
+
+任何憑證都可以用（私有 CA、`mkcert`、公開 CA），瀏覽器要信任簽發的 CA。
+
+以私有 **Step-CA** 為例：先用 `step ca certificate hermes-chat hermes-chat.crt hermes-chat.key --san <你的 IP 或主機名稱> ...` 簽發一次，之後交給續期容器自動處理。續期容器寫在 `compose.override.yaml`（已加入 .gitignore，Docker Compose 會自動載入）：
+
+```yaml
+services:
+  hermes-chat-cert-renewer:
+    image: smallstep/step-ca:0.30.2
+    restart: unless-stopped
+    user: "1000:1000"          # 和 Hermes Chat 相同的 UID，續期後的金鑰才讀得到
+    entrypoint: ["step"]
+    command: [ca, renew, --daemon, --ca-url, "https://step-ca:9000", --root, /etc/step/root_ca.crt,
+              /certs/hermes-chat.crt, /certs/hermes-chat.key]
+    volumes:
+      - /path/to/certs/hermes-chat:/certs
+      - /path/to/root_ca.crt:/etc/step/root_ca.crt:ro
+    networks: [pki]
+networks:
+  pki:
+    external: true
+    name: <你的 step-ca 網路名稱>
+```
 
 ## MCP、Skills 與模型設定（選用）
 

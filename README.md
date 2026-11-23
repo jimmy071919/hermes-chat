@@ -37,7 +37,7 @@ mkdir -p data
 docker compose up -d --build
 ```
 
-Open `http://<HOST>:<PORT>` (default port `9120`) and log in with `APP_PASSWORD`.
+Open `http://<HOST>:<PORT>` (or `https://` when TLS is configured; default port `9120`) and log in with `APP_PASSWORD`.
 
 ```bash
 docker compose logs -f      # logs
@@ -57,7 +57,35 @@ docker compose down         # stop
 | `HERMES_HOME` | Hermes home folder, default `~/.hermes` |
 | `HERMES_URL`, `HERMES_API_KEY` | Override the API address/key read from `$HERMES_HOME/.env` |
 | `MAX_UPLOAD_MB` | Size limit per upload, default `200` |
+| `TLS_CERT_FILE`, `TLS_KEY_FILE` | Optional. Serve HTTPS, see below |
 | `DASHBOARD_*` | MCP/Skills management, see below |
+
+## HTTPS (optional)
+
+Set `TLS_CERT_FILE` and `TLS_KEY_FILE` in `.env` (PEM, leaf + intermediates; absolute paths under your home folder) and Hermes Chat serves **HTTPS** on `PORT` instead of HTTP. The login cookie becomes `Secure`. Certificate files are watched: when they are renewed, the new certificate is loaded within about a minute without a restart.
+
+Any certificate works (a private CA, `mkcert`, a public one). Browsers must trust the issuing CA.
+
+Example with a private **Step-CA**: issue the certificate once with `step ca certificate hermes-chat hermes-chat.crt hermes-chat.key --san <your IP or hostname> ...`, then let a sidecar renew it. Put the sidecar in `compose.override.yaml` (gitignored, loaded automatically by Docker Compose):
+
+```yaml
+services:
+  hermes-chat-cert-renewer:
+    image: smallstep/step-ca:0.30.2
+    restart: unless-stopped
+    user: "1000:1000"          # same UID as Hermes Chat so it can read the renewed key
+    entrypoint: ["step"]
+    command: [ca, renew, --daemon, --ca-url, "https://step-ca:9000", --root, /etc/step/root_ca.crt,
+              /certs/hermes-chat.crt, /certs/hermes-chat.key]
+    volumes:
+      - /path/to/certs/hermes-chat:/certs
+      - /path/to/root_ca.crt:/etc/step/root_ca.crt:ro
+    networks: [pki]
+networks:
+  pki:
+    external: true
+    name: <your step-ca network>
+```
 
 ## MCP, Skills and model settings (optional)
 
