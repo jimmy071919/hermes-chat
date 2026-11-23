@@ -28,7 +28,9 @@ A ChatGPT-style web chat for a self-hosted [Hermes Agent](https://github.com/Nou
 ```bash
 git clone https://github.com/jimmy071919/hermes-chat.git
 cd hermes-chat
-cp .env.example .env        # set HOST, APP_PASSWORD, DATA_PATH, UID/GID
+cp .env.example .env        # then set HOST and APP_PASSWORD
+# fill in your UID/GID and the absolute data path automatically
+sed -i "s/^UID=.*/UID=$(id -u)/; s/^GID=.*/GID=$(id -g)/; s#^DATA_PATH=.*#DATA_PATH=$PWD/data#" .env
 mkdir -p data
 docker compose up -d --build
 ```
