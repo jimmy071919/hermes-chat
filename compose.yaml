@@ -1,0 +1,22 @@
+services:
+  hermes-chat:
+    build: .
+    image: hermes-chat:local
+    container_name: hermes-chat
+    restart: unless-stopped
+    # host network: reach the Hermes API server on the tailnet IP and bind next to the dashboard
+    network_mode: host
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file: .env
+    environment:
+      HERMES_ENV_FILE: /run/hermes.env
+      # Same absolute path as on the host, so Hermes (running on the host) can read
+      # uploads and write outputs that this container serves for download.
+      DATA_DIR: ${DATA_PATH:?set DATA_PATH in .env}
+      DOWNLOAD_ROOTS: ${HOME}
+      DASHBOARD_TOKEN_FILE: /run/hermes-dashboard-token
+    volumes:
+      - ${HOME}/.hermes/.env:/run/hermes.env:ro          # API_SERVER_KEY / host / port
+      - ${HOME}/.hermes/dashboard-session-token:/run/hermes-dashboard-token:ro   # dashboard API (MCP / skills management)
+      - ${HOME}:${HOME}:ro                                # let you download files Hermes writes anywhere in ~ (dot-dirs are refused)
+      - ${DATA_PATH}:${DATA_PATH}                                         # upload/output workspace (read-write)

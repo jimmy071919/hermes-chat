@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Hermes Chat</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/vendor/github.min.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="/vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="side-top">
+      <button id="newChat" class="side-btn primary" title="新聊天 (Ctrl+Shift+O)">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新聊天</span>
+      </button>
+      <button id="closeSidebar" class="icon-btn only-mobile" aria-label="關閉側欄">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="side-search">
+      <input id="search" type="search" placeholder="搜尋聊天…" autocomplete="off">
+    </div>
+    <div id="sessFilter" class="sess-filter" role="tablist" aria-label="篩選聊天">
+      <button type="button" data-f="all" class="on">全部</button>
+      <button type="button" data-f="web">網頁</button>
+      <button type="button" data-f="xiaozhi">小智</button>
+    </div>
+    <label class="side-toggle"><input type="checkbox" id="showAll"> 顯示所有來源 (CLI / Telegram…)</label>
+    <nav id="sessionList" aria-label="聊天紀錄"></nav>
+    <button id="adminBtn" class="side-admin" type="button">
+      <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      <span>MCP 與 Skills 管理</span>
+    </button>
+    <div class="side-bottom">
+      <div id="health" class="health"><span class="dot"></span><span class="txt">連線中…</span></div>
+      <button id="logout" class="link-btn">登出</button>
+    </div>
+  </aside>
+  <div id="scrim"></div>
+
+  <main id="main">
+    <header id="topbar">
+      <button id="openSidebar" class="icon-btn" aria-label="開啟側欄">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <div class="model-wrap">
+        <button id="modelBtn" class="model-btn" type="button" aria-haspopup="listbox" title="切換模型">
+          <span id="modelName">預設模型</span>
+          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div id="modelMenu" class="model-menu" hidden>
+          <div class="mm-head">
+            <input id="modelSearch" type="search" placeholder="搜尋模型…" autocomplete="off">
+            <button id="modelRefresh" class="icon-btn" type="button" title="重新抓取模型清單"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
+          </div>
+          <div class="mm-effort">
+            <span>推理強度</span>
+            <div id="effortSeg" class="seg">
+              <button type="button" data-v="">自動</button><button type="button" data-v="low">低</button><button type="button" data-v="medium">中</button><button type="button" data-v="high">高</button>
+            </div>
+          </div>
+          <div id="modelList" class="mm-list" role="listbox"></div>
+        </div>
+      </div>
+      <div id="title" class="title"></div>
+      <div class="top-actions">
+        <button id="filesBtn" class="icon-btn" title="此聊天的檔案" aria-label="檔案">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span id="filesCount" class="badge" hidden></span>
+        </button>
+      </div>
+    </header>
+
+    <section id="chat">
+      <div id="empty" class="empty">
+        <div class="logo">☤</div>
+        <h1>今天想讓 Hermes 做什麼？</h1>
+      </div>
+      <div id="messages"></div>
+    </section>
+
+    <footer id="composerWrap">
+      <div id="approval" hidden></div>
+      <form id="composer">
+        <div id="attachments"></div>
+        <div class="composer-row">
+          <button type="button" id="attachBtn" class="icon-btn round" title="附加檔案或圖片" aria-label="附加檔案">
+            <svg viewBox="0 0 24 24"><path d="M21 12.5l-8.5 8.5a5 5 0 0 1-7-7L14 5.5a3.3 3.3 0 0 1 4.7 4.7L10.2 18.7a1.7 1.7 0 0 1-2.4-2.4L15.5 8.6"/></svg>
+          </button>
+          <input type="file" id="fileInput" multiple hidden>
+          <textarea id="input" rows="1" placeholder="傳訊息給 Hermes" autocomplete="off"></textarea>
+          <button type="submit" id="sendBtn" class="send" aria-label="送出" disabled>
+            <svg class="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            <svg class="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+          </button>
+        </div>
+      </form>
+      <div class="hint">Hermes 會使用工具並可能出錯，請檢查重要資訊。Enter 送出 · Shift+Enter 換行</div>
+    </footer>
+    <div id="dropOverlay"><div>放開以上傳檔案</div></div>
+  </main>
+
+  <aside id="filesPanel" hidden>
+    <div class="panel-head">
+      <strong>檔案</strong>
+      <button id="refreshFiles" class="icon-btn" title="重新整理"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
+      <button id="closeFiles" class="icon-btn" aria-label="關閉"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div id="filesBody"></div>
+  </aside>
+</div>
+<div id="admin" hidden>
+  <div class="admin-shell">
+    <header class="admin-head">
+      <strong>管理</strong>
+      <nav class="admin-tabs" role="tablist">
+        <button type="button" data-tab="mcp" class="on">MCP 伺服器</button>
+        <button type="button" data-tab="skills">Skills</button>
+      </nav>
+      <button id="adminClose" class="icon-btn" type="button" aria-label="關閉"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </header>
+    <div id="adminBody" class="admin-body"></div>
+  </div>
+</div>
+<div id="modal" hidden><div class="modal-card"></div></div>
+<div id="lightbox" hidden><img alt=""></div>
+<div id="toast" hidden></div>
+
+<script src="/vendor/marked.min.js"></script>
+<script src="/vendor/purify.min.js"></script>
+<script src="/vendor/highlight.min.js"></script>
+<script src="/app.js"></script>
+<script src="/admin.js"></script>
+</body>
+</html>
