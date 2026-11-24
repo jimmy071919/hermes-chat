@@ -1,0 +1,12 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../public/app.js'), 'utf8');
+const fn = source.match(/function isInternalDelegationNotice\(m\) \{[\s\S]*?\n\}/)[0];
+const isNotice = vm.runInNewContext(`(${fn})`);
+const notice = '[ASYNC DELEGATION BATCH COMPLETE — deleg_9a67dd5e]\nA background fan-out unit you dispatched earlier — 2 subagent(s) — has finished; details';
+assert.equal(isNotice({role:'user', content:notice}), true);
+assert.equal(isNotice({role:'assistant', content:notice}), false);
+assert.equal(isNotice({role:'user', content:'我想知道 ASYNC DELEGATION 的意思'}), false);
+assert.equal(isNotice({role:'user', content:'[ASYNC DELEGATION BATCH COMPLETE — deleg_123]\n我寫的訊息'}), false);
+console.log('PASS: internal notices filtered; real messages retained');

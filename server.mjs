@@ -263,8 +263,11 @@ async function proxy(req, res, upstreamPath, { body, method } = {}) {
     init.headers['Content-Type'] = 'application/json';
   }
   const ac = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-  init.signal = ac.signal;
+  if (!(upstreamPath === '/v1/runs' && init.method === 'POST')) {
+    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    init.signal = ac.signal;
+  }
+  if (upstreamPath === '/v1/runs' && req.headers['idempotency-key']) init.headers['Idempotency-Key'] = req.headers['idempotency-key'];
   let up;
   try {
     up = await fetch(CFG.hermesUrl + upstreamPath, init);
@@ -384,6 +387,25 @@ async function handleApi(req, res, url) {
       body.system_message = body.system_message ? `${extra}\n\n${body.system_message}` : extra;
       return proxy(req, res, `/api/sessions/${enc}/chat/stream`, { body });
     }
+  }
+
+  if (p === '/api/runs' && req.method === 'POST') {
+    const body = await readJson(req);
+    const id = body.session_id;
+    if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) return send(res, 400, { error: { message: 'bad session id' } });
+    const key = req.headers['idempotency-key'];
+    if (typeof key !== 'string' || !/^[!-~]{1,255}$/.test(key)) return send(res, 400, { error: { message: 'Idempotency-Key required' } });
+    const d = sessionDirs(id);
+    await fsp.mkdir(d.uploads, { recursive: true });
+    await fsp.mkdir(d.outputs, { recursive: true });
+    body.instructions = body.instructions ? `${workspaceInstructions(id)}\n\n${body.instructions}` : workspaceInstructions(id);
+    return proxy(req, res, '/v1/runs', { body });
+  }
+  if ((m = p.match(/^\/api\/runs\/([^/]+)(\/events)?$/)) && req.method === 'GET') {
+    if (!RUN_ID_RE.test(m[1])) return send(res, 400, { error: { message: 'bad run id' } });
+    const seq = url.searchParams.get('last_seq');
+    if (seq !== null && !/^(?:-1|[0-9]+)$/.test(seq)) return send(res, 400, { error: { message: 'bad sequence' } });
+    return proxy(req, res, `/v1/runs/${m[1]}${m[2] || ''}${m[2] && seq !== null ? `?last_seq=${seq}` : ''}`);
   }
 
   if ((m = p.match(/^\/api\/runs\/([^/]+)\/(stop|approval)$/)) && req.method === 'POST') {

@@ -1,0 +1,46 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../public/app.js'), 'utf8');
+const sendCode = source.slice(source.indexOf('async function send()'), source.indexOf('async function* sseEvents'));
+
+function setup(events, history) {
+  let poll, rendered, stops = 0;
+  const box = { children: [], append(x) { this.children.push(x); x.isConnected = true; }, set innerHTML(v) { this.children = []; } };
+  const input = { value: 'hello' };
+  const S = { streaming: null, attachments: [], current: 's' };
+  const ctx = { S, console, AbortController, JSON, encodeURIComponent,
+    $: s => s === '#input' ? input : box,
+    h: (tag, attrs, text) => ({ textContent: text, append(...xs) { this.children = xs; }, attrs, isConnected: false }),
+    ensureSession: async () => 's', api: async (path) => { if (path.includes('/stop')) stops++; return { data: history.shift() ?? [] }; },
+    autoResize() {}, clearAttachments() {}, chatEl: () => ({ classList: { add() {}, toggle() {} } }),
+    renderUser: () => ({}), renderHistory: msgs => { rendered = msgs; },
+    AssistantView: class { constructor() { this.el = { append() {} }; this.text = ''; } setStreaming() {} setText(x) { this.text = x; } delta(x) { this.text += x; } finishTools() {} meta() {} error() {} },
+    stickToBottom() {}, updateSendState() {}, hideApproval() {}, loadSessions() {}, refreshFiles() {}, modelRequestFields: () => ({}),
+    fetch: async () => ({ ok: true, body: {} }), sseEvents: async function* () { for (const x of events) { if (x instanceof Error) throw x; yield x; } },
+    setInterval(fn) { poll = fn; return 1; }, clearInterval() {}, autoStick: false,
+  };
+  vm.createContext(ctx); vm.runInContext(sendCode, ctx);
+  return { ctx, S, getPoll: () => poll, getRendered: () => rendered, getStops: () => stops };
+}
+
+test('queued and done remain unconfirmed and saved history is refreshed', async () => {
+  const a = [{ id: 1, role: 'user', content: 'old' }];
+  const b = [...a, { id: 2, role: 'assistant', content: 'actual result' }];
+  const t = setup([['run.queued', {}], ['done', {}]], [a, a, b]);
+  await t.ctx.send();
+  assert.equal(t.S.streaming.monitoring, true);
+  await t.getPoll()();
+  assert.equal(t.getRendered()[1].content, 'actual result');
+  assert.equal(t.getStops(), 0);
+});
+
+test('unexpected EOF and read errors remain unconfirmed; terminal event releases UI', async () => {
+  for (const events of [[], [new Error('network')]]) {
+    const t = setup(events, [[], []]); await t.ctx.send();
+    assert.equal(t.S.streaming.monitoring, true); assert.equal(t.getStops(), 0);
+  }
+  const t = setup([['assistant.completed', { content: 'ok' }], ['run.completed', {}], ['done', {}]], [[]]);
+  await t.ctx.send(); assert.equal(t.S.streaming, null); assert.equal(t.getPoll(), undefined);
+});

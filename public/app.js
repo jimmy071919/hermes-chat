@@ -332,14 +332,27 @@ class AssistantView {
   toolEnd(name, ok, preview, key) {
     let entry = key && this.tools.get(key);
     if (!entry) for (const e of this.tools.values()) if (e.name === name && e.el.classList.contains('running')) { entry = e; break; }
-    if (!entry) { const k = this.toolStart(name, preview); entry = this.tools.get(k); }
+    if (!entry) { const k = this.toolStart(name, ''); entry = this.tools.get(k); }
     entry.el.classList.remove('running'); entry.el.classList.add(ok ? 'done' : 'failed');
-    if (preview && key) entry.pre.textContent += (entry.pre.textContent ? '\n\n── 結果 ──\n' : '') + preview;
+    if (preview) appendToolResult(entry.pre, preview);
   }
-  finishTools() { for (const e of this.tools.values()) if (e.el.classList.contains('running')) { e.el.classList.remove('running'); e.el.classList.add('done'); } if (this.thinkEl) this.thinkEl.querySelector('summary').textContent = '思考過程'; }
+  finishTools() { for (const e of this.tools.values()) if (e.el.classList.contains('running')) { e.el.classList.remove('running'); e.el.querySelector('summary').append('（結果未知）'); } if (this.thinkEl) this.thinkEl.querySelector('summary').textContent = '思考過程'; }
   commentary(t) { this.toolsEl.append(h('div', { class: 'thinking' }, t)); }
   error(msg) { this.el.append(h('div', { class: 'err-box' }, msg)); }
   meta(t) { this.el.append(h('div', { class: 'meta-line' }, t)); }
+}
+// Tool output is untrusted: keep it as text, link only explicit HTTP(S) URLs.
+function appendToolResult(pre, result) {
+  if (pre.textContent) pre.append(document.createTextNode('\n\n── 結果 ──\n'));
+  const re = /https?:\/\/[^\s<>"'\\]+/gi;
+  let last = 0, match;
+  while ((match = re.exec(result))) {
+    const url = match[0].replace(/[.,;:!?\)\]]+$/, '');
+    pre.append(document.createTextNode(result.slice(last, match.index)));
+    pre.append(h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, url));
+    last = match.index + url.length;
+  }
+  pre.append(document.createTextNode(result.slice(last)));
 }
 function toolLabel(name, preview) {
   const short = (preview || '').replace(/\s+/g, ' ').slice(0, 70);
@@ -430,37 +443,59 @@ function setTitle(t) { $('#title').textContent = t || '';document.title = t ? `$
 
 // ---------- open / new ----------
 function newChat() {
-  if (S.streaming) stopRun();
+  historyRequest++; historySnapshot = null;
   S.current = null; history.replaceState(null, '', '/');
+  $('#title').classList.remove('xz-title');
+  $('#historyStatus').hidden = true;
   $('#messages').innerHTML = ''; chatEl().classList.remove('has-messages');
   setTitle(''); clearAttachments(); renderSessions(); updateFilesBadge(0); applySessionModel(null);
   if (!$('#filesPanel').hidden) renderFiles();
   closeSidebarMobile(); $('#input').focus();
 }
 
+let historyRequest = 0, historySnapshot = null, historyPolling = false;
 async function openSession(id, { quiet } = {}) {
-  if (S.streaming && S.current !== id) stopRun();
-  S.current = id; history.replaceState(null, '', `#/s/${encodeURIComponent(id)}`);
-  renderSessions(); closeSidebarMobile();
+  const request = ++historyRequest;
+  if (!quiet) historySnapshot = null;
+  S.current = id;
+  if (!quiet) { history.replaceState(null, '', `#/s/${encodeURIComponent(id)}`); renderSessions(); closeSidebarMobile(); }
   const s = S.sessions.find((x) => x.id === id);
   setTitle(s?.title || s?.preview || '聊天');
   $('#title').classList.toggle('xz-title', isXiaozhi(s ?? { id }));
   $('#title').dataset.label = ccLabel();
-  applySessionModel(id);
+  $('#historyStatus').hidden = !isXiaozhi(s ?? { id });
+  if (!quiet) applySessionModel(id);
   const box = $('#messages');
   if (!quiet) box.innerHTML = '';
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(id)}/messages?limit=500`);
-    if (S.current !== id) return;
+    if (S.current !== id || request !== historyRequest || (quiet && S.streaming)) return;
+    const messages = data.data || [];
+    const snapshot = JSON.stringify(messages);
+    if (quiet && snapshot === historySnapshot) { $('#historyStatus').textContent = '每 10 秒更新已儲存紀錄'; return; }
+    const opened = quiet ? [...box.querySelectorAll('details')].map((d) => d.open) : [];
+    const scrollTop = chatEl().scrollTop, wasAtBottom = autoStick;
     box.innerHTML = '';
-    renderHistory(data.data || []);
+    renderHistory(messages);
+    historySnapshot = snapshot;
+    if (isXiaozhi(s)) $('#historyStatus').textContent = '每 10 秒更新已儲存紀錄';
+    if (quiet) box.querySelectorAll('details').forEach((d, i) => { d.open = !!opened[i]; });
     chatEl().classList.toggle('has-messages', box.children.length > 0);
-    stickToBottom(true);
-  } catch (e) { box.innerHTML = ''; box.append(h('div', { class: 'err-box' }, '載入失敗：' + e.message)); }
-  refreshFiles();
+    if (!quiet || wasAtBottom) stickToBottom(true); else chatEl().scrollTop = scrollTop;
+  } catch (e) {
+    if (S.current !== id || request !== historyRequest) return;
+    if (quiet) { console.warn('更新聊天失敗', e); $('#historyStatus').textContent = '更新失敗，稍後重試'; }
+    else { box.innerHTML = ''; box.append(h('div', { class: 'err-box' }, '載入失敗：' + e.message)); }
+  }
+  if (!quiet && S.current === id && request === historyRequest) { refreshFiles(); resumeRun(id); }
 }
 
 function parseMaybeJson(v) { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } }
+
+function isInternalDelegationNotice(m) {
+  return m.role === 'user' && typeof m.content === 'string' &&
+    /^\[ASYNC DELEGATION BATCH COMPLETE — deleg_[a-zA-Z0-9]+\]\nA background fan-out unit you dispatched earlier — \d+ subagent\(s\) — has finished;/.test(m.content);
+}
 
 function renderHistory(msgs) {
   const box = $('#messages');
@@ -468,6 +503,7 @@ function renderHistory(msgs) {
   let cur = null; // AssistantView for grouped assistant/tool msgs
   const flush = () => { if (cur) { cur.setText(cur.text); cur.finishTools(); cur = null; } };
   for (const m of msgs) {
+    if (isInternalDelegationNotice(m)) continue;
     if (m.role === 'user') {
       flush();
       box.append(renderUser(parseMaybeJson(m.content)));
@@ -486,7 +522,7 @@ function renderHistory(msgs) {
     } else if (m.role === 'tool') {
       if (!cur) { cur = new AssistantView(); box.append(cur.el); }
       const out = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-      cur.toolEnd(m.tool_name, !/^\s*\{?\s*"?error/i.test(out || ''), (out || '').slice(0, 4000), m.tool_call_id);
+      cur.toolEnd(m.tool_name, !/^\s*\{?\s*"?error/i.test(out || ''), out || '', m.tool_call_id);
     }
   }
   flush();
@@ -572,7 +608,7 @@ async function imageForModel(file) {
 // ---------- send / stream ----------
 function updateSendState() {
   const btn = $('#sendBtn');
-  if (S.streaming) { btn.disabled = false; btn.classList.add('stop'); btn.setAttribute('aria-label', '停止'); return; }
+  if (S.streaming) { btn.disabled = !!S.streaming.monitoring; btn.classList.add('stop'); btn.setAttribute('aria-label', S.streaming.monitoring ? '等待已儲存紀錄' : '停止'); return; }
   btn.classList.remove('stop'); btn.setAttribute('aria-label', '送出');
   const uploading = S.attachments.some((a) => a.status === 'uploading' || a.status === 'pending');
   const has = $('#input').value.trim() || S.attachments.some((a) => a.status === 'done');
@@ -599,56 +635,89 @@ async function send() {
 
   input.value = ''; autoResize(); clearAttachments();
   const box = $('#messages'); chatEl().classList.add('has-messages');
-  box.append(renderUser(images.length ? [{ type: 'text', text: fullText }, ...images.map((a) => ({ type: 'image_url', image_url: { url: a.modelUrl } }))] : fullText));
+  box.append(renderUser(message));
   const view = new AssistantView(); box.append(view.el); view.setStreaming(true);
   autoStick = true; stickToBottom(true);
-
-  const ctrl = new AbortController();
-  S.streaming = { runId: null, ctrl, sid }; updateSendState();
-  let finished = false, gotFinal = false;
-  try {
-    const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/chat/stream`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, ...modelRequestFields() }), signal: ctrl.signal,
-    });
-    if (r.status === 401) { location.href = '/login'; return; }
-    if (!r.ok || !r.body) {
-      const err = await r.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${r.status}`);
+  const st = { sid, view, runId: null, seq: -1, ctrl: new AbortController(), stopRequested: false };
+  S.streaming = st; updateSendState();
+  const key = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  const payload = JSON.stringify({ input: typeof message === 'string' ? message : [{ role: 'user', content: message }], session_id: sid, ...modelRequestFields() });
+  // A lost admission response is retried with the same key and exact payload.
+  let admissionNotice = false;
+  for (;;) {
+    try {
+      const r = await fetch('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: payload });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw Object.assign(new Error(d?.error?.message || `HTTP ${r.status}`), { definitive: r.status < 500 }); }
+      const d = await r.json(); st.runId = d.run_id;
+      if (!st.runId) throw new Error('回應缺少 run_id');
+      try { localStorage.setItem(`hc.run.${sid}`, st.runId); } catch {}
+      if (st.stopRequested) await stopRun();
+      break;
+    } catch (e) {
+      if (e.definitive) { view.error(e.message); view.setStreaming(false); S.streaming = null; updateSendState(); return; }
+      if (!admissionNotice) { view.meta('連線中斷，正在確認工作是否已建立…'); admissionNotice = true; }
+      await new Promise(r => setTimeout(r, 2000));
     }
-    for await (const [event, data] of sseEvents(r.body)) {
-      if (data?.run_id && !S.streaming?.runId && S.streaming) S.streaming.runId = data.run_id;
-      switch (event) {
-        case 'assistant.delta': view.delta(data.delta || ''); break;
-        case 'assistant.commentary': if (!data.already_streamed) view.commentary(data.text); break;
-        case 'tool.progress': if (data.tool_name === '_thinking') view.thinking(data.delta || ''); break;
-        case 'tool.started': view.toolStart(data.tool_name, data.preview, data.args); stickToBottom(); break;
-        case 'tool.completed': view.toolEnd(data.tool_name, true, data.preview); break;
-        case 'tool.failed': view.toolEnd(data.tool_name, false, data.preview); break;
-        case 'approval.request': showApproval(data); break;
-        case 'assistant.completed': gotFinal = true; view.setText(data.content ?? view.text); break;
-        case 'run.completed': {
-          finished = true;
-          const bits = [data.runtime?.model, data.usage?.total_tokens ? `${data.usage.total_tokens.toLocaleString()} tokens` : ''].filter(Boolean);
-          if (bits.length) view.meta(bits.join(' · '));
-          break;
-        }
-        case 'run.failed': finished = true; view.error('執行失敗：' + (data.error || data.message || data.reason || '未知錯誤')); break;
-        case 'run.cancelled': finished = true; view.meta('已停止'); break;
-        case 'run.queued': view.meta('已排入佇列，稍後完成'); break;
-        case 'error': view.error(data.message || '發生錯誤'); break;
-        case 'done': finished = true; break;
-      }
-    }
-  } catch (e) {
-    if (e.name === 'AbortError') view.meta('已停止');
-    else view.error('連線錯誤：' + e.message);
-  } finally {
-    if (!gotFinal) view.setText(view.text);
-    view.setStreaming(false); view.finishTools(); hideApproval();
-    S.streaming = null; updateSendState();
-    loadSessions(); refreshFiles();
-    if (!finished) console.warn('stream ended without terminal event');
   }
+  await followRun(st);
+}
+
+async function followRun(st) {
+  const view = st.view;
+  let finished = false, disconnectNotice = false;
+  while (!finished) {
+    try {
+      const r = await fetch(`/api/runs/${encodeURIComponent(st.runId)}/events?last_seq=${st.seq}`, { signal: st.ctrl.signal });
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
+      for await (let [event, data] of sseEvents(r.body)) {
+        event = data.event || event;
+        if (Number.isInteger(data.seq)) { if (data.seq <= st.seq) continue; st.seq = data.seq; }
+        switch (event) {
+          case 'message.delta':
+          case 'assistant.delta': view.delta(data.delta || ''); break;
+          case 'message.interim':
+          case 'assistant.commentary': if (!data.already_streamed) view.commentary(data.text); break;
+          case 'tool.progress': if (data.tool_name === '_thinking') view.thinking(data.delta || ''); break;
+          case 'tool.started': view.toolStart(data.tool || data.tool_name, data.preview, data.args); break;
+          case 'tool.completed': view.toolEnd(data.tool || data.tool_name, !data.error, data.preview); break;
+          case 'tool.failed': view.toolEnd(data.tool || data.tool_name, false, data.preview); break;
+          case 'approval.request': if (S.current === st.sid) showApproval(data); break;
+          case 'assistant.completed': view.setText(data.content ?? view.text); break;
+          case 'replay.truncated': view.meta('部分即時紀錄已過期，完成後請查看聊天紀錄'); break;
+          case 'run.completed': finished = true; if (typeof data.output === 'string') view.setText(data.output); break;
+          case 'run.interrupted': finished = true; view.error('工作因後端重新啟動而中斷'); break;
+          case 'run.failed': finished = true; view.error('執行失敗：' + (data.error || data.message || data.reason || '未知錯誤')); break;
+          case 'run.cancelled': finished = true; view.meta('已停止'); break;
+        }
+      }
+    } catch (e) { console.warn('run reconnect', e); }
+    if (!finished) {
+      try {
+        const status = await api(`/api/runs/${encodeURIComponent(st.runId)}`);
+        if (['completed', 'failed', 'cancelled', 'interrupted'].includes(status.status)) {
+          finished = true;
+          if (status.status !== 'completed') view.meta(status.status === 'cancelled' ? '已停止' : '執行失敗或中斷');
+          if (typeof status.output === 'string') view.setText(status.output);
+        }
+      } catch (e) { console.warn('run status', e); }
+    }
+    if (!finished) { if (!disconnectNotice) { view.meta('連線中斷，正在重新連線…'); disconnectNotice = true; } await new Promise(r => setTimeout(r, 2000)); }
+  }
+  try { localStorage.removeItem(`hc.run.${st.sid}`); } catch {}
+  view.setStreaming(false); view.finishTools(); hideApproval();
+  if (S.streaming === st) S.streaming = null;
+  updateSendState(); loadSessions(); refreshFiles();
+}
+
+function resumeRun(sid) {
+  if (S.streaming) { if (S.streaming.sid === sid) $('#messages').append(S.streaming.view.el); return; }
+  let runId; try { runId = localStorage.getItem(`hc.run.${sid}`); } catch {}
+  if (!runId) return;
+  const view = new AssistantView(); $('#messages').append(view.el); view.setStreaming(true);
+  const st = { sid, runId, view, seq: -1, ctrl: new AbortController(), stopRequested: false };
+  S.streaming = st; updateSendState(); followRun(st);
 }
 
 async function* sseEvents(stream) {
@@ -676,8 +745,10 @@ async function* sseEvents(stream) {
 
 async function stopRun() {
   const st = S.streaming; if (!st) return;
-  if (st.runId) { try { await api(`/api/runs/${st.runId}/stop`, { method: 'POST', body: '{}' }); } catch {} }
-  setTimeout(() => st.ctrl.abort(), st.runId ? 1500 : 0);
+  st.stopRequested = true;
+  if (!st.runId) { toast('等待工作建立後停止'); return; }
+  try { await api(`/api/runs/${encodeURIComponent(st.runId)}/stop`, { method: 'POST', body: '{}' }); }
+  catch (e) { st.stopRequested = false; toast('停止請求失敗：' + e.message); }
 }
 
 // ---------- approvals ----------
@@ -810,5 +881,12 @@ async function init() {
   if (m) openSession(decodeURIComponent(m[1])); else { applySessionModel(null); $('#input').focus(); }
   checkHealth(); setInterval(checkHealth, 30000);
   setInterval(() => { if (!S.streaming && document.visibilityState === 'visible') loadSessions(); }, 20000);
+  // Poll saved history only for the selected Xiaozhi session; this is not a live stream.
+  setInterval(async () => {
+    const s = S.sessions.find((x) => x.id === S.current);
+    if (historyPolling || S.streaming || document.visibilityState !== 'visible' || !isXiaozhi(s)) return;
+    historyPolling = true;
+    try { await openSession(s.id, { quiet: true }); } finally { historyPolling = false; }
+  }, 10000);
 }
 init();
